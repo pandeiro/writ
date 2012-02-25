@@ -18,50 +18,50 @@ content=$(cat "$1")
 content=${content#Publish}
 
 echo "DEBUGGING:"
-echo "$url"
-echo "$username"
-echo "$password"
-echo "$title"
-echo "$content"
+echo
 
 # Convert markdown to HTML
 html=$(echo "$content" | markdown > "$title/index.html")
 
-echo "$html"
-
 # Prepare headers
 resource="$username:$password@$url"
-headers="Content-Type: application/json"
+headers=" -H \'Content-Type: application/json\'"
 
 # Create JSON key value pairs
-ts=$(date +%s)
-htmlfile=$(base64 "$title/index.html")
-data='"title":"'$title'","ts":'$((ts * 1000))',"_attachments":{"index.html":{"content_type":"text/html","data":"'$(base64 "$title/index.html")'"}}'
-
-echo "$ts"
+ts=$(($(date +%s) * 1000))
+base64=$(base64 "$title/index.html")
+data='"title":"'$title'","ts":'$ts',"_attachments":{"index.html":{"content_type":"text/html","data":"'$base64'"}}'
 
 # Determine method and add revision if document id exists already
 if [ -f "$title/id" ]; then
     method=PUT
     id=$(cat "$title/id")
     resource="$resource/$id"
-    rev=$(curl "$resource" | grep -Po '"_rev":.*?[^\\]",')
-    data='"_id":"'$id'",'$rev"$data"
+    rev=$(curl -s "$resource" | grep -Po '"_rev":.*?[^\\]",')
+    data='"_id":"'$id'",'$rev$data
 else
     method=POST
 fi
 
 # Wrap key value pairs in curly brackets for valid JSON
-data='{'"$data"'}'
-
-echo "$data"
+data=" -d \'{$data}\'"
 
 # Send HTTP request
-response=$(curl -X "$method" "$resource" -H "$headers" -d "$data" cat )
+curl_command="curl -vX $method $resource $headers $data"
+
+response=$($curl_command)
+
+## I can't figure out wtf is going on. Despite the curl_command
+## string coming out perfectly formed when I echo it and paste it
+## as a command (it works), then I try to execute the variable
+## as a command in the script, it fails, 400 Bad Request and says the
+## json is invalid. Looking at curl's verbose output, it also
+## doesn't seem to be setting the Content-Type header despite the
+## expicit instruction.
 
 # Add id file if none exists
 if [ ! -f "$title/id" ]; then
     id=$(echo "$response" | grep -Po '"id":.*?[^\\]"')
     id=${id:6:32}
-    echo $id > "$title/id"
+    #echo $id > "$title/id"
 fi
