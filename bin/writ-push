@@ -1,0 +1,67 @@
+#!/bin/bash
+
+# Writ-push 0.0.1
+# Upload writ-generated files
+
+Usage="Usage: $0 <file-to-push>"
+
+# Make sure argument is a file
+if [ ! -f "$1" ]; then
+    echo "Error: Couldn't locate file $content."
+    exit 1
+fi
+
+# Get url, username, and password from config and prepare title and content
+. ~/.writrc
+title=$(dirname "$1")
+content=$(cat "$1")
+content=${content#Publish}
+
+echo "DEBUGGING:"
+echo "$url"
+echo "$username"
+echo "$password"
+echo "$title"
+echo "$content"
+
+# Convert markdown to HTML
+html=$(echo "$content" | markdown > "$title/index.html")
+
+echo "$html"
+
+# Prepare headers
+resource="$username:$password@$url"
+headers="Content-Type: application/json"
+
+# Create JSON key value pairs
+ts=$(date +%s)
+htmlfile=$(base64 "$title/index.html")
+data='"title":"'$title'","ts":'$((ts * 1000))',"_attachments":{"index.html":{"content_type":"text/html","data":"'$(base64 "$title/index.html")'"}}'
+
+echo "$ts"
+
+# Determine method and add revision if document id exists already
+if [ -f "$title/id" ]; then
+    method=PUT
+    id=$(cat "$title/id")
+    resource="$resource/$id"
+    rev=$(curl "$resource" | grep -Po '"_rev":.*?[^\\]",')
+    data='"_id":"'$id'",'$rev"$data"
+else
+    method=POST
+fi
+
+# Wrap key value pairs in curly brackets for valid JSON
+data='{'"$data"'}'
+
+echo "$data"
+
+# Send HTTP request
+response=$(curl -X "$method" "$resource" -H "$headers" -d "$data" cat )
+
+# Add id file if none exists
+if [ ! -f "$title/id" ]; then
+    id=$(echo "$response" | grep -Po '"id":.*?[^\\]"')
+    id=${id:6:32}
+    echo $id > "$title/id"
+fi

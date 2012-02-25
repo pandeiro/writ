@@ -1,0 +1,36 @@
+#!/bin/bash
+
+# Writ 0.0.1
+# For blogging
+
+Usage="Usage: $0 <Your Title>"
+
+title=$@
+
+# Show Usage if there is no title
+if [ -z "$title" ]; then
+    echo "$Usage"
+    exit 1
+fi
+
+# Check there's a repo, otherwise make one
+git status &> /dev/null
+if [ $? -eq 128 ]; then
+    echo "Not in a git repository, making one here."
+    git init
+fi
+
+# Titles must be unique for now
+if [ -d "$title" ]; then
+    echo "Error: This title's taken."
+    exit 1
+fi
+
+# Create the article
+mkdir "$title"
+cd "$title"
+echo -e "# $title\n\n" > content
+
+# Open for editing
+emacs -nw +3 content -f markdown-mode
+
