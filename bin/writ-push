@@ -1,67 +1,130 @@
 #!/bin/bash
 
+
 # Writ-push 0.0.1
-# Upload writ-generated files
+# 
+# Creates or updates a document on CouchDB with the compiled HTML
+# of the story.
 
-Usage="Usage: $0 <file-to-push>"
+Usage="Usage: $0 <directory-of-story-or-content-file>"
+if [ $# -eq 0 ]; then
+    echo "$Usage"
+    exit 0
+fi
 
-# Make sure argument is a file
-if [ ! -f "$1" ]; then
-    echo "Error: Couldn't locate file $content."
+# Make sure argument is a file or a directory with a content file in it
+if [ -d "$1" ]; then
+    directory=$(echo "$1" | sed -e "s/\/*$//")
+    file="$directory/content"
+else
+    file="$1"
+fi
+
+if [ ! -f "$file" ]; then
+    echo "Error: Couldn't locate file $file."
     exit 1
 fi
 
 # Get url, username, and password from config and prepare title and content
 . ~/.writrc
-title=$(dirname "$1")
-content=$(cat "$1")
-content=${content#Publish}
-
-echo "DEBUGGING:"
-echo
+title=$(dirname "$file")
+content=$(cat "$file")
 
 # Convert markdown to HTML
-html=$(echo "$content" | markdown > "$title/index.html")
+html=$(echo "$content" | markdown > "$title/content.html")
 
 # Prepare headers
 resource="$username:$password@$url"
-headers=" -H \'Content-Type: application/json\'"
 
-# Create JSON key value pairs
+# Sends requests and JSON if POST or PUT
+request() {
+    local url method json file b64 content_type curl_args response
+    url="$1"
+    curl_args=(-sX)
+
+    echo "$0: DEBUG: $# args in request"
+
+    case $# in
+	1) curl_args+=("GET" "$url");;
+	2) method="$2"
+	   curl_args+=("$method" "$url");;
+	3) method="$2"
+	   json="$3"
+	   content_type="Content-Type: application/json"
+	   curl_args+=("$method" "$url" -H "$content_type" -d "$json");;
+	*) for a in $@; do
+	       echo "$0: ERROR: Too many request arguments: $a"
+	   done
+	   return;;
+    esac
+
+    response=$(curl "${curl_args[@]}")
+    echo $response
+}
+
+attachment() {
+    local file filename filetype b64 frag
+
+    if [ ! -f "$1" ]; then
+	echo "$0: File $1 not found."
+	exit 1
+    fi
+
+    file="$1"
+    filename=$(basename "$file")
+    filetype=$(file -ib "$file")
+    filetype=${filetype/;*/}
+    b64=$(base64 "$file")
+
+    fragment="\"$filename\": {\"content_type\": \"$filetype\", \"data\": \"$b64\"}"
+    echo $fragment
+}
+
+# Create data array with key-value pairs
 ts=$(($(date +%s) * 1000))
-base64=$(base64 "$title/index.html")
-data='"title":"'$title'","ts":'$ts',"_attachments":{"index.html":{"content_type":"text/html","data":"'$base64'"}}'
+attachment_obj=$(attachment "$title/content.html")
 
-# Determine method and add revision if document id exists already
+data=("\"title\":\"$title\",")
+data+=("\"ts\":$ts,")
+data+=("\"_attachments\":{")
+data+=("$attachment_obj}")
+
+# Modify method, url, and data if it's an Update
 if [ -f "$title/id" ]; then
     method=PUT
     id=$(cat "$title/id")
     resource="$resource/$id"
-    rev=$(curl -s "$resource" | grep -Po '"_rev":.*?[^\\]",')
-    data='"_id":"'$id'",'$rev$data
+    rev=$(request "$resource" | grep -Po '"_rev":.*?[^\\]",')
+    data+=(",$rev")
+    data+=("\"_id\":\"$id\"")
 else
     method=POST
 fi
 
+# Make a string from an array of key-value pairs and wrap curly brackets
+to_json() {
+    local o
+    o="{"
+    for kv in "$@"; do
+	o+="$kv"
+    done
+    o+="}"
+    echo "$o"
+}
+
 # Wrap key value pairs in curly brackets for valid JSON
-data=" -d \'{$data}\'"
+json=$(to_json "${data[@]}")
 
-# Send HTTP request
-curl_command="curl -vX $method $resource $headers $data"
+echo "$json"
 
-response=$($curl_command)
+# Send request
+response=$(request "$resource" "$method" "$json")
 
-## I can't figure out wtf is going on. Despite the curl_command
-## string coming out perfectly formed when I echo it and paste it
-## as a command (it works), then I try to execute the variable
-## as a command in the script, it fails, 400 Bad Request and says the
-## json is invalid. Looking at curl's verbose output, it also
-## doesn't seem to be setting the Content-Type header despite the
-## expicit instruction.
+echo "$response"
 
 # Add id file if none exists
-if [ ! -f "$title/id" ]; then
+if [ ! -f "$title/id" ] || [ -z $(cat "$title/id") ]; then
     id=$(echo "$response" | grep -Po '"id":.*?[^\\]"')
     id=${id:6:32}
-    #echo $id > "$title/id"
+    echo $id > "$title/id"
 fi
